@@ -1,0 +1,304 @@
+# Poker API — схема взаимодействия
+
+Чистая версия схемы из `Poker_API_extended.drawio`, собранная на Mermaid.
+
+**Участники**
+
+| Обозначение | Роль |
+|---|---|
+| `U` | Пользователь — человек за интерфейсом |
+| `C` | Клиент — фронтенд, хранит Auth Token |
+| `S` | Сервер — вся бизнес-логика и валидация |
+| `DB` | База данных |
+
+Везде, где игрок уже авторизован, клиент прикладывает `Auth Token`, и проверяет его **сервер**, а не БД.
+
+---
+
+## Жизненный цикл партии
+
+```mermaid
+stateDiagram-v2
+    [*] --> LOBBY_OPEN: создание лобби (turn_amount >= 1)
+    LOBBY_OPEN --> LOBBY_OPEN: вход игрока (игроков < 4)
+    LOBBY_OPEN --> IN_PROGRESS: начало игры (2..4 игрока)
+    IN_PROGRESS --> IN_PROGRESS: ход игрока
+    IN_PROGRESS --> FINISHED: все игроки сделали N ходов
+    FINISHED --> [*]
+```
+
+Ход внутри `IN_PROGRESS`:
+
+```mermaid
+stateDiagram-v2
+    throw1 : Бросок 1 (все 5 костей)
+    fix : Фиксация костей
+    reroll : Переброс
+    combo : Выбор комбинации
+
+    [*] --> throw1: INSERT Turn + 5 Dice
+    throw1 --> fix: выбор is_fixed
+    fix --> reroll: throw_number < 3
+    reroll --> fix
+    throw1 --> combo: выбрать combo_id
+    reroll --> combo
+    combo --> [*]: score + total_points
+```
+
+---
+
+## 1. Авторизация / регистрация
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Авторизация / регистрация
+    C->>S: Логин, Пароль
+    S->>DB: login / password_hash (регистрация)
+    Note over S,DB: Регистрация — сервер хеширует пароль перед INSERT.<br/>Вход — БД возвращает password_hash, пароль проверяется на сервере.
+    DB-->>S: user_id
+    S->>DB: SELECT лобби со status = LOBBY_OPEN
+    DB-->>S: session_id, status (OPEN)
+    S-->>C: Информация профиля + Auth Token
+    S-->>C: Множество доступных лобби
+    C-->>U: Список доступных лобби
+```
+
+## 2. Создание лобби
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Создание лобби, кол-во ходов
+    C->>S: Auth Token + turn_amount
+    Note over S: Токен проверяет сервер, turn_amount >= 1
+    S->>DB: INSERT сессии с turn_amount
+    DB-->>S: session_id, status
+    S-->>C: Информация лобби
+    C-->>U: Страница лобби
+```
+
+## 3. Поиск лобби
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Поиск лобби
+    C->>S: Auth Token
+    S->>DB: SELECT status = LOBBY_OPEN
+    Note over S,DB: Возврат только лобби со статусом LOBBY_OPEN
+    DB-->>S: session_id, status
+    S-->>C: Множество доступных лобби
+    C-->>U: Список доступных лобби
+```
+
+## 4. Вход в лобби
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Вход в лобби
+    C->>S: Auth Token + session_id
+    S->>DB: session_id + user_id
+    Note over S,DB: Проверки — status = LOBBY_OPEN, игроков < 4,<br/>пользователь ещё не состоит в этом лобби
+    DB-->>S: session_id, status, players[]
+    S-->>C: Лобби
+    C-->>U: Игрок входит в матч
+```
+
+## 5. Начало игры
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Начало игры
+    C->>S: session_id
+    S->>DB: SELECT status, players[], turn_amount
+    DB-->>S: status, players[], turn_amount
+    Note over S,DB: Сервер проверяет — 2..4 игрока, status = LOBBY_OPEN.<br/>Порядок игроков задаётся через turn_at / turn_order.
+    S->>DB: UPDATE status = IN_PROGRESS
+    DB-->>S: OK
+    S-->>C: current_player_id, turn_number = 1
+    C-->>U: Игровая страница
+```
+
+## 6. Первый бросок костей
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Бросить кости
+    C->>S: Auth Token + session_id
+    S->>DB: INSERT Turn + 5 Dice
+    Note over S,DB: Первый бросок — всеми 5 костями.<br/>Значения 1..6 генерирует сервер, combo_id пока NULL.
+    DB-->>S: turn_id, dice[]
+    S-->>C: turn_id, throw_number = 1, dice[], combinations[]
+    C-->>U: Результат броска
+```
+
+## 7. Фиксация / освобождение костей
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Зафиксировать / освободить кости
+    C->>S: Auth Token + fixed_die_ids[]
+    S->>DB: UPDATE Dice.is_fixed
+    Note over S,DB: Менять фиксацию можно после 1-го и 2-го броска.<br/>Перед 3-м броском throw_number должен быть < 3.
+    DB-->>S: dice[]
+    S-->>C: dice[]
+    C-->>U: Кости зафиксированы / освобождены
+```
+
+## 8. Повторный бросок
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Бросить повторно
+    C->>S: Auth Token + turn_id
+    S->>DB: SELECT Dice, throw_number
+    DB-->>S: dice[], throw_number
+    S->>DB: UPDATE нефиксированных Dice + throw_number + 1
+    Note over S,DB: Сервер перебрасывает только is_fixed = FALSE.<br/>Максимум 3 броска за ход.
+    DB-->>S: dice[], throw_number
+    S-->>C: dice[], throw_number, combinations[]
+    C-->>U: Результат броска
+```
+
+## 9. Выбор комбинации / завершение хода
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Выбрать комбинацию / завершить ход
+    C->>S: Auth Token + turn_id + combo_id
+    S->>DB: SELECT Dice + Combination
+    Note over S,DB: Сервер проверяет, что combo_id соответствует текущим костям.<br/>При нескольких доступных комбинациях игрок выбирает одну.
+    DB-->>S: dice[], bonus_points
+    S->>DB: UPDATE Turns(score, combo_id) + Players.total_points
+    Note over S,DB: score = сумма костей комбинации + bonus_points.<br/>Комбинация с 1-го броска — x2, кроме «Шанса».<br/>После 3 бросков без комбинации score = 0.
+    DB-->>S: score, total_points
+    S-->>C: score, total_points
+    C-->>U: Результат хода
+```
+
+## 10. Переход хода
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    C->>S: Auth Token + session_id
+    S->>DB: SELECT players, completed turns, turn_amount
+    DB-->>S: Состояние партии
+    Note over S,DB: Если не все игроки сделали N ходов —<br/>сервер выбирает следующего игрока по turn_order.
+    S-->>C: current_player_id, turn_number, standings[]
+    C-->>U: Следующий ход
+```
+
+## 11. Завершение партии
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    C->>S: Auth Token + session_id
+    S->>DB: Проверить — у всех игроков N ходов
+    DB-->>S: players + total_points
+    Note over S,DB: Максимальный total_points определяет победителя.<br/>При равенстве максимума winner_ids содержит несколько игроков (ничья).
+    S->>DB: UPDATE status = FINISHED
+    DB-->>S: OK
+    S-->>C: status = FINISHED, results[], winner_ids[]
+    C-->>U: Страница результатов
+```
+
+## 12. Выход из матча
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Пользователь
+    participant C as Клиент
+    participant S as Сервер
+    participant DB as БД
+
+    U->>C: Выход из матча
+    C->>S: Auth Token + session_id
+    S->>DB: session_id + user_id
+    DB-->>S: user_id, login
+    S-->>C: Профиль
+    C-->>U: Профиль игрока
+```
+
+---
+
+## Сводка данных
+
+| Сценарий | Клиент → Сервер | Сервер → Клиент |
+|---|---|---|
+| Авторизация / регистрация | Логин, Пароль | Профиль + Auth Token, список лобби |
+| Создание лобби | Auth Token + turn_amount | session_id, status |
+| Поиск лобби | Auth Token | Множество лобби со status = LOBBY_OPEN |
+| Вход в лобби | Auth Token + session_id | session_id, status, players[] |
+| Начало игры | session_id | current_player_id, turn_number = 1 |
+| Первый бросок | Auth Token + session_id | turn_id, throw_number, dice[], combinations[] |
+| Фиксация костей | Auth Token + fixed_die_ids[] | dice[] |
+| Повторный бросок | Auth Token + turn_id | dice[], throw_number, combinations[] |
+| Завершение хода | Auth Token + turn_id + combo_id | score, total_points |
+| Переход хода | Auth Token + session_id | current_player_id, turn_number, standings[] |
+| Завершение партии | Auth Token + session_id | status = FINISHED, results[], winner_ids[] |
+| Выход из матча | Auth Token + session_id | Профиль игрока |
