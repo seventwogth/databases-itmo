@@ -2,6 +2,8 @@
 
 Чистая версия схемы из `Poker_API_extended.drawio`, собранная на Mermaid.
 
+Связанные документы — правила игры в [`game-rules.md`](./game-rules.md), функции БД в [`sql-functions.md`](./sql-functions.md), схема данных — `poker_DB.drawio`.
+
 **Участники**
 
 | Обозначение | Роль |
@@ -140,7 +142,7 @@ sequenceDiagram
     C->>S: session_id
     S->>DB: SELECT status, players[], turn_amount
     DB-->>S: status, players[], turn_amount
-    Note over S,DB: Сервер проверяет — 2..4 игрока, status = LOBBY_OPEN.<br/>Порядок игроков задаётся через turn_at / turn_order.
+    Note over S,DB: Сервер проверяет — 2..4 игрока, status = LOBBY_OPEN.<br/>Порядок игроков задаётся через Players.turn_at.
     S->>DB: UPDATE status = IN_PROGRESS
     DB-->>S: OK
     S-->>C: current_player_id, turn_number = 1
@@ -220,9 +222,9 @@ sequenceDiagram
     C->>S: Auth Token + turn_id + combo_id
     S->>DB: SELECT Dice + Combination
     Note over S,DB: Сервер проверяет, что combo_id соответствует текущим костям.<br/>При нескольких доступных комбинациях игрок выбирает одну.
-    DB-->>S: dice[], bonus_points
-    S->>DB: UPDATE Turns(score, combo_id) + Players.total_points
-    Note over S,DB: score = сумма костей комбинации + bonus_points.<br/>Комбинация с 1-го броска — x2, кроме «Шанса».<br/>После 3 бросков без комбинации score = 0.
+    DB-->>S: dice[], Combinations.points
+    S->>DB: UPDATE Turns.combo_id + Players.total_points
+    Note over S,DB: score = сумма костей комбинации + Combinations.points.<br/>Комбинация с 1-го броска — x2, кроме «Шанса».<br/>После 3 бросков без комбинации score = 0.<br/>В Turns колонки score нет — очки вычисляются функцией turn_score().
     DB-->>S: score, total_points
     S-->>C: score, total_points
     C-->>U: Результат хода
@@ -241,7 +243,7 @@ sequenceDiagram
     C->>S: Auth Token + session_id
     S->>DB: SELECT players, completed turns, turn_amount
     DB-->>S: Состояние партии
-    Note over S,DB: Если не все игроки сделали N ходов —<br/>сервер выбирает следующего игрока по turn_order.
+    Note over S,DB: Если не все игроки сделали N ходов —<br/>сервер выбирает следующего игрока по Players.turn_at.
     S-->>C: current_player_id, turn_number, standings[]
     C-->>U: Следующий ход
 ```
