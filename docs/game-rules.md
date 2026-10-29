@@ -153,7 +153,7 @@ stateDiagram-v2
 | 2..4 игрока, `N` ходов | `create_lobby`, `join_lobby`, `start_game`, `trg_players_limit` |
 | Не более трёх бросков за ход | `begin_turn`, `reroll_dice` (проверка `throw_number < 3`) |
 | Первый бросок — всеми костями | `begin_turn` |
-| Фиксация 0..5 костей, изменение выбора | `set_dice_fixed` |
+| Фиксация 0..5 костей, изменение выбора | `reroll_dice` → `set_dice_fixed` |
 | Переброс только нефиксированных | `reroll_dice` |
 | Набор комбинаций и их условия | `has_pair` … `has_chance`, `combo_matches` |
 | Сумма костей комбинации | `combo_dice_sum` |

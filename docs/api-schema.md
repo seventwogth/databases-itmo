@@ -34,13 +34,13 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     throw1 : Бросок 1 (все 5 костей)
-    fix : Фиксация костей
+    fix : Фиксация костей (на клиенте)
     reroll : Переброс
     combo : Выбор комбинации
 
     [*] --> throw1: автоматически, INSERT Turn + 5 Dice
     throw1 --> fix: выбор is_fixed
-    fix --> reroll: throw_number < 3
+    fix --> reroll: fixed_die_ids[], throw_number < 3
     reroll --> fix
     throw1 --> combo: выбрать combo_id
     reroll --> combo
@@ -130,7 +130,7 @@ sequenceDiagram
 
 ## 5. Начало игры и первый бросок
 
-Первый бросок хода пользователь не запускает: сервер делает его сам в том же запросе, что и старт партии. Для следующих ходов первый бросок так же выполняется автоматически при закрытии предыдущего хода (сценарий 8).
+Первый бросок хода пользователь не запускает: сервер делает его сам в том же запросе, что и старт партии. Для следующих ходов первый бросок так же выполняется автоматически при закрытии предыдущего хода (сценарий 7).
 
 ```mermaid
 sequenceDiagram
@@ -154,7 +154,9 @@ sequenceDiagram
     C-->>U: Игровая страница с результатом первого броска
 ```
 
-## 6. Фиксация / освобождение костей
+## 6. Фиксация костей и повторный бросок
+
+Фиксация — локальное состояние клиента: пользователь может сколько угодно раз фиксировать и освобождать кости, не обращаясь к серверу. На сервер выбор уходит один раз — вместе с запросом на переброс, полным списком фиксируемых костей.
 
 ```mermaid
 sequenceDiagram
@@ -164,37 +166,23 @@ sequenceDiagram
     participant S as Сервер
     participant DB as БД
 
-    U->>C: Зафиксировать / освободить кости
-    C->>S: Auth Token + fixed_die_ids[]
-    S->>DB: UPDATE Dice.is_fixed
-    Note over S,DB: Менять фиксацию можно после 1-го и 2-го броска.<br/>Перед 3-м броском throw_number должен быть < 3.
-    DB-->>S: dice[]
-    S-->>C: dice[]
-    C-->>U: Кости зафиксированы / освобождены
-```
-
-## 7. Повторный бросок
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as Пользователь
-    participant C as Клиент
-    participant S as Сервер
-    participant DB as БД
-
+    loop До нажатия «Бросить повторно»
+        U->>C: Зафиксировать / освободить кость
+        C-->>U: Кость отмечена (только на клиенте)
+    end
     U->>C: Бросить повторно
-    C->>S: Auth Token + turn_id
+    C->>S: Auth Token + turn_id + fixed_die_ids[]
     S->>DB: SELECT Dice, throw_number
     DB-->>S: dice[], throw_number
-    S->>DB: UPDATE нефиксированных Dice + throw_number + 1
-    Note over S,DB: Сервер перебрасывает только is_fixed = FALSE.<br/>Максимум 3 броска за ход.
+    Note over S,DB: Проверки — ход игрока и не закрыт, throw_number < 3,<br/>все die_id принадлежат ходу, зафиксировано 0..4 костей.
+    S->>DB: UPDATE Dice.is_fixed + нефиксированных Dice + throw_number + 1
+    Note over S,DB: Одна транзакция: сначала фиксация по fixed_die_ids[],<br/>затем переброс только is_fixed = FALSE. Максимум 3 броска за ход.
     DB-->>S: dice[], throw_number
     S-->>C: dice[], throw_number, combinations[]
     C-->>U: Результат броска
 ```
 
-## 8. Выбор комбинации / завершение хода
+## 7. Выбор комбинации / завершение хода
 
 ```mermaid
 sequenceDiagram
@@ -221,7 +209,7 @@ sequenceDiagram
     C-->>U: Результат хода
 ```
 
-## 9. Состояние партии (short-polling)
+## 8. Состояние партии (short-polling)
 
 Один и тот же запрос клиент периодически шлёт во время партии. Переход хода и завершение партии — не отдельные вызовы, а две ветки ответа: сервер проверяет, сделали ли все игроки N ходов, и по этому условию либо отдаёт следующий ход, либо закрывает партию.
 
@@ -257,7 +245,7 @@ sequenceDiagram
 
 Клиент различает ветки по полю `status` и прекращает опрос, получив `FINISHED`. Повторные запросы к завершённой партии `UPDATE` не выполняют и просто возвращают результаты, поэтому запрос идемпотентен.
 
-## 10. Выход из матча
+## 9. Выход из матча
 
 ```mermaid
 sequenceDiagram
@@ -286,8 +274,7 @@ sequenceDiagram
 | Поиск лобби | Auth Token | Множество лобби со status = LOBBY_OPEN |
 | Вход в лобби | Auth Token + session_id | session_id, status, players[] |
 | Начало игры и первый бросок | Auth Token + session_id | current_player_id, turn_number = 1, turn_id, throw_number = 1, dice[], combinations[] |
-| Фиксация костей | Auth Token + fixed_die_ids[] | dice[] |
-| Повторный бросок | Auth Token + turn_id | dice[], throw_number, combinations[] |
+| Фиксация и повторный бросок | Auth Token + turn_id + fixed_die_ids[] | dice[], throw_number, combinations[] |
 | Завершение хода | Auth Token + turn_id + combo_id | score, total_points |
 | Состояние партии (polling) | Auth Token + session_id | `IN_PROGRESS`: current_player_id, turn_number, turn_id, throw_number, dice[], combinations[], standings[]<br/>`FINISHED`: results[], winner_ids[] |
 | Выход из матча | Auth Token + session_id | Профиль игрока |
