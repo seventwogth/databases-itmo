@@ -77,7 +77,7 @@ erDiagram
 | `register_user` | `p_login varchar`, `p_password_hash varchar` | `integer` (`user_id`) | Регистрация, `INSERT INTO Users` | `login` уникален и непустой, хеш непустой |
 | `find_user_by_login` | `p_login varchar` | `TABLE(user_id integer, login varchar, password_hash varchar)` | Вход — сервер сам сверяет хеш | — (пустой результат = нет пользователя) |
 | `touch_last_active` | `p_user_id integer` | `void` | `UPDATE Users.last_active = now()` при каждом запросе с валидным токеном | пользователь существует |
-| `get_profile` | `p_user_id integer` | `TABLE(user_id integer, login varchar, last_active datetime, games_played integer, games_won integer, best_total integer)` | Страница профиля (сценарии 1 и 11), агрегаты по `Players` | пользователь существует |
+| `get_profile` | `p_user_id integer` | `TABLE(user_id integer, login varchar, last_active datetime, games_played integer, games_won integer, best_total integer)` | Страница профиля (сценарии 1 и 10), агрегаты по `Players` | пользователь существует |
 
 ## 2. Лобби
 
@@ -88,9 +88,9 @@ erDiagram
 | `get_lobby` | `p_session_id integer` | `TABLE(session_id integer, status text, turn_amount integer, players jsonb)` | Карточка лобби: состав игроков с `turn_at` | сессия существует |
 | `join_lobby` | `p_session_id integer`, `p_user_id integer` | `integer` (`player_id`) | `INSERT Players` с `turn_at` = следующий свободный номер, `total_points = 0` | `status = LOBBY_OPEN`, игроков `< 4`, пользователь ещё не в этом лобби |
 | `leave_lobby` | `p_session_id integer`, `p_user_id integer` | `void` | Выход до старта, `turn_at` остальных пересчитывается; при уходе последнего сессия удаляется | `status = LOBBY_OPEN`, игрок состоит в лобби |
-| `start_game` | `p_session_id integer`, `p_user_id integer` | `TABLE(session_id integer, current_player_id integer, turn_number integer)` | `UPDATE status = IN_PROGRESS`, `started_at = now()`, раздача `turn_at` | `status = LOBBY_OPEN`, `2..4` игрока |
+| `start_game` | `p_session_id integer`, `p_user_id integer` | `TABLE(session_id integer, current_player_id integer, turn_number integer, turn_id integer, throw_number integer, dice jsonb)` | `UPDATE status = IN_PROGRESS`, `started_at = now()`, раздача `turn_at`, автоматический первый бросок через `begin_turn` (сценарий 5) | `status = LOBBY_OPEN`, `2..4` игрока |
 | `assign_turn_at` | `p_session_id integer` | `void` | Служебная: случайная перестановка `Players.turn_at` в `1..players_count` при старте | вызывается только из `start_game` |
-| `leave_match` | `p_session_id integer`, `p_user_id integer` | `TABLE(user_id integer, login varchar)` | Выход из матча (сценарий 11), возвращает профиль | игрок состоит в сессии; незакрытый ход закрывается с 0 очков |
+| `leave_match` | `p_session_id integer`, `p_user_id integer` | `TABLE(user_id integer, login varchar)` | Выход из матча (сценарий 10), возвращает профиль | игрок состоит в сессии; незакрытый ход закрывается с 0 очков, следующему игроку открывается ход через `begin_turn` |
 
 ## 3. Игровой процесс: ход
 
@@ -99,7 +99,7 @@ erDiagram
 | `current_player` | `p_session_id integer` | `integer` (`player_id`) | Чей сейчас ход — по `Players.turn_at` и числу закрытых ходов | `status = IN_PROGRESS` |
 | `assert_player_turn` | `p_player_id integer` | `void` | Служебная проверка «это твой ход», используется всеми функциями хода | сессия игрока `IN_PROGRESS`, `p_player_id = current_player()` |
 | `is_turn_closed` | `p_turn_id integer` | `boolean` | Ход закрыт, если `combo_id IS NOT NULL`; ход без комбинации после третьего броска — см. [расхождения со схемой](#расхождения-со-схемой-которые-закрывают-функции) | ход существует |
-| `begin_turn` | `p_player_id integer` | `TABLE(turn_id integer, turn_number integer, throw_number integer, dice jsonb)` | `INSERT Turns` (`turn_number` = следующий, `throw_number = 1`, `combo_id = NULL`) + 5 костей с `is_fixed = FALSE` | ход игрока, нет незакрытого хода, сделано `< turn_amount` ходов |
+| `begin_turn` | `p_player_id integer` | `TABLE(turn_id integer, turn_number integer, throw_number integer, dice jsonb)` | Автоматический первый бросок: `INSERT Turns` (`turn_number` = следующий, `throw_number = 1`, `combo_id = NULL`) + 5 костей с `is_fixed = FALSE`. Из API напрямую не вызывается — только из `start_game`, `finish_turn`, `skip_turn`, `leave_match` | ход игрока, нет незакрытого хода, сделано `< turn_amount` ходов |
 | `roll_dice_values` | `p_count integer` | `integer[]` | Служебная: генерация `p_count` значений `1..6` (`VOLATILE`) | `p_count` в `1..5` |
 | `set_dice_fixed` | `p_turn_id integer`, `p_fixed_die_ids integer[]` | `TABLE(die_id integer, value integer, is_fixed boolean)` | `UPDATE Dice.is_fixed` — фиксация и снятие фиксации одним вызовом (полный список фиксируемых) | ход игрока и не закрыт, `throw_number < 3`, все `die_id` принадлежат этому ходу, их не более 5 |
 | `reroll_dice` | `p_turn_id integer` | `TABLE(throw_number integer, dice jsonb)` | Переброс только `is_fixed = FALSE` и `throw_number + 1` | ход игрока и не закрыт, `throw_number < 3`, есть хотя бы одна нефиксированная кость |
@@ -107,9 +107,9 @@ erDiagram
 | `turn_dice_values` | `p_turn_id integer` | `integer[]` | Служебная: 5 значений костей хода для чистых функций подсчёта | ход существует, ровно 5 костей |
 | `available_combinations` | `p_turn_id integer` | `TABLE(combo_id integer, name varchar, points integer, potential_score integer)` | Комбинации, подходящие под текущие кости, с предварительным счётом (правило «несколько вариантов») | ход существует и не закрыт |
 | `turn_score` | `p_turn_id integer` | `integer` | Очки за ход — **вычисляются**, в `Turns` колонки `score` нет: `calc_score(кости, name, points, throw_number)` | ход существует; `combo_id IS NULL` → `0` |
-| `finish_turn` | `p_turn_id integer`, `p_combo_id integer` | `TABLE(score integer, total_points integer)` | `UPDATE Turns.combo_id` + `Players.total_points += turn_score()` | ход игрока и не закрыт, комбинация существует и соответствует текущим костям |
-| `skip_turn` | `p_turn_id integer` | `TABLE(score integer, total_points integer)` | Закрытие хода без комбинации после трёх бросков — `score = 0` | ход игрока и не закрыт, `throw_number = 3` |
-| `advance_turn` | `p_session_id integer` | `TABLE(current_player_id integer, turn_number integer, standings jsonb)` | Переход хода к следующему по `turn_at` (сценарий 10, ветка `IN_PROGRESS`) | `status = IN_PROGRESS`, предыдущий ход закрыт |
+| `finish_turn` | `p_turn_id integer`, `p_combo_id integer` | `TABLE(score integer, total_points integer)` | `UPDATE Turns.combo_id` + `Players.total_points += turn_score()`; если партия не завершена — `begin_turn` для следующего игрока (сценарий 8) | ход игрока и не закрыт, комбинация существует и соответствует текущим костям |
+| `skip_turn` | `p_turn_id integer` | `TABLE(score integer, total_points integer)` | Закрытие хода без комбинации после трёх бросков — `score = 0`; если партия не завершена — `begin_turn` для следующего игрока | ход игрока и не закрыт, `throw_number = 3` |
+| `advance_turn` | `p_session_id integer` | `TABLE(current_player_id integer, turn_number integer, standings jsonb)` | Переход хода к следующему по `turn_at` (сценарий 9, ветка `IN_PROGRESS`) | `status = IN_PROGRESS`, предыдущий ход закрыт |
 
 ## 4. Комбинации и подсчёт очков (чистые функции, `IMMUTABLE`)
 
@@ -187,7 +187,7 @@ flowchart LR
         L5 --> L6["assign_turn_at"]
     end
 
-    subgraph turn["6-9. Ход"]
+    subgraph turn["5-8. Ход"]
         T1["begin_turn"] --> T2["set_dice_fixed"]
         T2 --> T3["reroll_dice"]
         T3 --> T2
@@ -197,7 +197,7 @@ flowchart LR
         T5 --> T6["turn_score → calc_score"]
     end
 
-    subgraph fin["10-11. Состояние партии и выход"]
+    subgraph fin["9-10. Состояние партии и выход"]
         F1["advance_turn"] --> F2["is_session_complete"]
         F2 --> F3["finish_session"]
         F3 --> F4["get_winners"]
@@ -207,8 +207,9 @@ flowchart LR
 
     auth --> lobby
     lobby --> turn
+    L5 -- "автоматический первый бросок" --> T1
     T5 --> F1
-    F2 -. "не все ходы сделаны" .-> T1
+    T5 -. "не все ходы сделаны — первый бросок следующего игрока" .-> T1
 ```
 
 Каждый вызов, кроме `register_user` и `find_user_by_login`, на сервере предваряется проверкой Auth Token и вызовом `touch_last_active`.
