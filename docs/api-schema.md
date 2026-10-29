@@ -1,9 +1,5 @@
 # Poker API — схема взаимодействия
 
-Чистая версия схемы из `Poker_API_extended.drawio`, собранная на Mermaid.
-
-Связанные документы — правила игры в [`game-rules.md`](./game-rules.md), функции БД в [`sql-functions.md`](./sql-functions.md), схема данных — `poker_DB.drawio`.
-
 **Участники**
 
 | Обозначение | Роль |
