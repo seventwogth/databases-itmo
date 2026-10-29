@@ -163,7 +163,7 @@ sequenceDiagram
         C-->>U: Кость отмечена (только на клиенте)
     end
     U->>C: Бросить повторно
-    C->>S: Auth Token + turn_id + fixed_die_ids[]
+    C->>S: Auth Token + fixed_die_ids[]
     S->>DB: SELECT Dice, throw_number
     DB-->>S: dice[], throw_number
     Note over S,DB: Проверки — ход игрока и не закрыт, throw_number < 3,<br/>все die_id принадлежат ходу, зафиксировано 0..4 костей.
