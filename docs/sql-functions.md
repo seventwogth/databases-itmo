@@ -77,7 +77,7 @@ erDiagram
 | `register_user` | `p_login varchar`, `p_password_hash varchar` | `integer` (`user_id`) | Регистрация, `INSERT INTO Users` | `login` уникален и непустой, хеш непустой |
 | `find_user_by_login` | `p_login varchar` | `TABLE(user_id integer, login varchar, password_hash varchar)` | Вход — сервер сам сверяет хеш | — (пустой результат = нет пользователя) |
 | `touch_last_active` | `p_user_id integer` | `void` | `UPDATE Users.last_active = now()` при каждом запросе с валидным токеном | пользователь существует |
-| `get_profile` | `p_user_id integer` | `TABLE(user_id integer, login varchar, last_active datetime, games_played integer, games_won integer, best_total integer)` | Страница профиля (сценарии 1 и 12), агрегаты по `Players` | пользователь существует |
+| `get_profile` | `p_user_id integer` | `TABLE(user_id integer, login varchar, last_active datetime, games_played integer, games_won integer, best_total integer)` | Страница профиля (сценарии 1 и 11), агрегаты по `Players` | пользователь существует |
 
 ## 2. Лобби
 
@@ -90,7 +90,7 @@ erDiagram
 | `leave_lobby` | `p_session_id integer`, `p_user_id integer` | `void` | Выход до старта, `turn_at` остальных пересчитывается; при уходе последнего сессия удаляется | `status = LOBBY_OPEN`, игрок состоит в лобби |
 | `start_game` | `p_session_id integer`, `p_user_id integer` | `TABLE(session_id integer, current_player_id integer, turn_number integer)` | `UPDATE status = IN_PROGRESS`, `started_at = now()`, раздача `turn_at` | `status = LOBBY_OPEN`, `2..4` игрока |
 | `assign_turn_at` | `p_session_id integer` | `void` | Служебная: случайная перестановка `Players.turn_at` в `1..players_count` при старте | вызывается только из `start_game` |
-| `leave_match` | `p_session_id integer`, `p_user_id integer` | `TABLE(user_id integer, login varchar)` | Выход из матча (сценарий 12), возвращает профиль | игрок состоит в сессии; незакрытый ход закрывается с 0 очков |
+| `leave_match` | `p_session_id integer`, `p_user_id integer` | `TABLE(user_id integer, login varchar)` | Выход из матча (сценарий 11), возвращает профиль | игрок состоит в сессии; незакрытый ход закрывается с 0 очков |
 
 ## 3. Игровой процесс: ход
 
@@ -109,7 +109,7 @@ erDiagram
 | `turn_score` | `p_turn_id integer` | `integer` | Очки за ход — **вычисляются**, в `Turns` колонки `score` нет: `calc_score(кости, name, points, throw_number)` | ход существует; `combo_id IS NULL` → `0` |
 | `finish_turn` | `p_turn_id integer`, `p_combo_id integer` | `TABLE(score integer, total_points integer)` | `UPDATE Turns.combo_id` + `Players.total_points += turn_score()` | ход игрока и не закрыт, комбинация существует и соответствует текущим костям |
 | `skip_turn` | `p_turn_id integer` | `TABLE(score integer, total_points integer)` | Закрытие хода без комбинации после трёх бросков — `score = 0` | ход игрока и не закрыт, `throw_number = 3` |
-| `advance_turn` | `p_session_id integer` | `TABLE(current_player_id integer, turn_number integer, standings jsonb)` | Переход хода к следующему по `turn_at` (сценарий 10) | `status = IN_PROGRESS`, предыдущий ход закрыт |
+| `advance_turn` | `p_session_id integer` | `TABLE(current_player_id integer, turn_number integer, standings jsonb)` | Переход хода к следующему по `turn_at` (сценарий 10, ветка `IN_PROGRESS`) | `status = IN_PROGRESS`, предыдущий ход закрыт |
 
 ## 4. Комбинации и подсчёт очков (чистые функции, `IMMUTABLE`)
 
@@ -197,7 +197,7 @@ flowchart LR
         T5 --> T6["turn_score → calc_score"]
     end
 
-    subgraph fin["10-12. Завершение"]
+    subgraph fin["10-11. Состояние партии и выход"]
         F1["advance_turn"] --> F2["is_session_complete"]
         F2 --> F3["finish_session"]
         F3 --> F4["get_winners"]

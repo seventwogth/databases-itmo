@@ -230,7 +230,9 @@ sequenceDiagram
     C-->>U: Результат хода
 ```
 
-## 10. Переход хода
+## 10. Состояние партии (short-polling)
+
+Один и тот же запрос клиент периодически шлёт во время партии. Переход хода и завершение партии — не отдельные вызовы, а две ветки ответа: сервер проверяет, сделали ли все игроки N ходов, и по этому условию либо отдаёт следующий ход, либо закрывает партию.
 
 ```mermaid
 sequenceDiagram
@@ -240,35 +242,31 @@ sequenceDiagram
     participant S as Сервер
     participant DB as БД
 
-    C->>S: Auth Token + session_id
-    S->>DB: SELECT players, completed turns, turn_amount
-    DB-->>S: Состояние партии
-    Note over S,DB: Если не все игроки сделали N ходов —<br/>сервер выбирает следующего игрока по Players.turn_at.
-    S-->>C: current_player_id, turn_number, standings[]
-    C-->>U: Следующий ход
+    loop Short-polling, пока status != FINISHED
+        C->>S: Auth Token + session_id
+        S->>DB: SELECT status, players, completed turns, turn_amount
+        DB-->>S: Состояние партии
+        alt Не все игроки сделали N ходов
+            Note over S,DB: Сервер выбирает следующего игрока по Players.turn_at.
+            S-->>C: status = IN_PROGRESS, current_player_id, turn_number, standings[]
+            C-->>U: Следующий ход
+        else У всех игроков N ходов
+            opt status = IN_PROGRESS (первый запрос после последнего хода)
+                S->>DB: UPDATE status = FINISHED
+                DB-->>S: OK
+            end
+            S->>DB: SELECT players + total_points
+            DB-->>S: results[]
+            Note over S,DB: Максимальный total_points определяет победителя.<br/>При равенстве максимума winner_ids содержит несколько игроков (ничья).
+            S-->>C: status = FINISHED, results[], winner_ids[]
+            C-->>U: Страница результатов
+        end
+    end
 ```
 
-## 11. Завершение партии
+Клиент различает ветки по полю `status` и прекращает опрос, получив `FINISHED`. Повторные запросы к завершённой партии `UPDATE` не выполняют и просто возвращают результаты, поэтому запрос идемпотентен.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as Пользователь
-    participant C as Клиент
-    participant S as Сервер
-    participant DB as БД
-
-    C->>S: Auth Token + session_id
-    S->>DB: Проверить — у всех игроков N ходов
-    DB-->>S: players + total_points
-    Note over S,DB: Максимальный total_points определяет победителя.<br/>При равенстве максимума winner_ids содержит несколько игроков (ничья).
-    S->>DB: UPDATE status = FINISHED
-    DB-->>S: OK
-    S-->>C: status = FINISHED, results[], winner_ids[]
-    C-->>U: Страница результатов
-```
-
-## 12. Выход из матча
+## 11. Выход из матча
 
 ```mermaid
 sequenceDiagram
@@ -301,6 +299,5 @@ sequenceDiagram
 | Фиксация костей | Auth Token + fixed_die_ids[] | dice[] |
 | Повторный бросок | Auth Token + turn_id | dice[], throw_number, combinations[] |
 | Завершение хода | Auth Token + turn_id + combo_id | score, total_points |
-| Переход хода | Auth Token + session_id | current_player_id, turn_number, standings[] |
-| Завершение партии | Auth Token + session_id | status = FINISHED, results[], winner_ids[] |
+| Состояние партии (polling) | Auth Token + session_id | `IN_PROGRESS`: current_player_id, turn_number, standings[]<br/>`FINISHED`: results[], winner_ids[] |
 | Выход из матча | Auth Token + session_id | Профиль игрока |
