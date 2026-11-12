@@ -102,7 +102,8 @@ erDiagram
 | `begin_turn` | `p_player_id integer` | `TABLE(turn_id integer, turn_number integer, throw_number integer, dice jsonb)` | Автоматический первый бросок: `INSERT Turns` (`turn_number` = следующий, `throw_number = 1`, `combo_id = NULL`) + 5 костей с `is_fixed = FALSE`. Из API напрямую не вызывается — только из `start_game`, `finish_turn`, `skip_turn`, `leave_match` | ход игрока, нет незакрытого хода, сделано `< turn_amount` ходов |
 | `roll_dice_values` | `p_count integer` | `integer[]` | Служебная: генерация `p_count` значений `1..6` (`VOLATILE`) | `p_count` в `1..5` |
 | `set_dice_fixed` | `p_turn_id integer`, `p_fixed_die_ids integer[]` | `TABLE(die_id integer, value integer, is_fixed boolean)` | Служебная: `UPDATE Dice.is_fixed` — фиксация и снятие фиксации одним вызовом (полный список фиксируемых); вызывается только из `reroll_dice` | ход игрока и не закрыт, `throw_number < 3`, все `die_id` принадлежат этому ходу, их не более 5 |
-| `reroll_dice` | `p_turn_id integer`, `p_fixed_die_ids integer[]` | `TABLE(throw_number integer, dice jsonb)` | Одна транзакция: `set_dice_fixed(p_fixed_die_ids)`, затем переброс только `is_fixed = FALSE` и `throw_number + 1` (сценарий 6) | ход игрока и не закрыт, `throw_number < 3`, есть хотя бы одна нефиксированная кость |
+| `active_turn` | `p_user_id integer` | `integer` (`turn_id`) | Служебная: незакрытый ход пользователя в его сессии со `status = IN_PROGRESS` — нужен там, где API не передаёт `turn_id` (сценарий 6) | у пользователя есть сессия `IN_PROGRESS`, сейчас его ход и он не закрыт, иначе `not_your_turn` |
+| `reroll_dice` | `p_user_id integer`, `p_fixed_die_ids integer[]` | `TABLE(turn_id integer, throw_number integer, dice jsonb)` | Одна транзакция: ход находится через `active_turn(p_user_id)`, затем `set_dice_fixed(turn_id, p_fixed_die_ids)`, переброс только `is_fixed = FALSE` и `throw_number + 1` (сценарий 6) | ход игрока и не закрыт, `throw_number < 3`, есть хотя бы одна нефиксированная кость |
 | `get_turn_state` | `p_turn_id integer` | `TABLE(turn_id integer, turn_number integer, throw_number integer, dice jsonb, combo_id integer, score integer)` | Состояние хода, в том числе для восстановления после реконнекта | ход существует |
 | `turn_dice_values` | `p_turn_id integer` | `integer[]` | Служебная: 5 значений костей хода для чистых функций подсчёта | ход существует, ровно 5 костей |
 | `available_combinations` | `p_turn_id integer` | `TABLE(combo_id integer, name varchar, points integer, potential_score integer)` | Комбинации, подходящие под текущие кости, с предварительным счётом (правило «несколько вариантов») | ход существует и не закрыт |
@@ -189,6 +190,7 @@ flowchart LR
 
     subgraph turn["5-7. Ход"]
         T1["begin_turn"] --> T3["reroll_dice"]
+        T3 --> T7["active_turn"]
         T3 --> T2["set_dice_fixed"]
         T3 -- "до 3 бросков" --> T3
         T1 --> T4["available_combinations"]

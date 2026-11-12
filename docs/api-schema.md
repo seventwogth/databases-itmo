@@ -262,7 +262,7 @@ sequenceDiagram
 | Поиск лобби | Auth Token | Множество лобби со status = LOBBY_OPEN |
 | Вход в лобби | Auth Token + session_id | session_id, status, players[] |
 | Начало игры и первый бросок | Auth Token + session_id | current_player_id, turn_number = 1, turn_id, throw_number = 1, dice[], combinations[] |
-| Фиксация и повторный бросок | Auth Token + turn_id + fixed_die_ids[] | dice[], throw_number, combinations[] |
+| Фиксация и повторный бросок | Auth Token + fixed_die_ids[] | dice[], throw_number, combinations[] |
 | Завершение хода | Auth Token + turn_id + combo_id | score, total_points |
 | Состояние партии (polling) | Auth Token + session_id | `IN_PROGRESS`: current_player_id, turn_number, turn_id, throw_number, dice[], combinations[], standings[]<br/>`FINISHED`: results[], winner_ids[] |
 | Выход из матча | Auth Token + session_id | Профиль игрока |
