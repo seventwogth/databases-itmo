@@ -124,11 +124,6 @@ CREATE TABLE Dice (
 
 `CHECK`-ограничения на `Dice.value` и `Turns.throw_number` задаются в разделе 6 (`trg_dice_value_range`, `trg_turns_throw_range`).
 
-### Расхождения со схемой, которые закрывают функции
-
-* В `Turns` добавлена колонка `is_closed boolean NOT NULL DEFAULT FALSE`. По схеме ход закрывается выбором комбинации (`combo_id IS NOT NULL`), но ход, пропущенный после третьего броска, тоже без комбинации — отличить его от текущего хода без флага нельзя. Флаг ставят `finish_turn` и `skip_turn`.
-* Ограничение `UNIQUE (session_id, turn_at)` (`AK2`) объявлено `DEFERRABLE INITIALLY DEFERRED`, иначе перенумерация `turn_at` в `leave_lobby` и `assign_turn_at` упирается в уникальность посреди `UPDATE`.
-
 ---
 
 ## 1. Пользователи и вход
