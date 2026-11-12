@@ -159,7 +159,7 @@ paths:
     post:
       tags: [lobby]
       summary: 4. Вход в лобби
-      description: '`join_lobby` → `get_lobby`. Проверки: `LOBBY_OPEN`, игроков < 4, пользователь ещё не в лобби.'
+      description: '`join_lobby` → `get_lobby`. Проверки: `LOBBY_OPEN`, игроков < 4, пользователь ещё не в лобби и не состоит в другой незавершённой сессии (`already_in_session`).'
       responses:
         '200':
           description: Лобби после входа

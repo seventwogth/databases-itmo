@@ -190,6 +190,16 @@ func TestFullGame(t *testing.T) {
 	c.expectError("POST", base+"/join", bob.Token, nil, 409, "already_joined")
 	c.expectError("POST", "/api/lobbies/999999/join", bob.Token, nil, 404, "lobby_not_found")
 
+	// в другое лобби, пока текущая сессия не завершена, войти нельзя
+	var carol authResp
+	var carolLobby struct {
+		SessionID int32 `json:"session_id"`
+	}
+	c.call("POST", "/api/auth/register", "", map[string]string{"login": "carol", "password": "pw-c"}, 201, &carol)
+	c.call("POST", "/api/lobbies", carol.Token, map[string]int{"turn_amount": 1}, 201, &carolLobby)
+	carolJoin := fmt.Sprintf("/api/lobbies/%d/join", carolLobby.SessionID)
+	c.expectError("POST", carolJoin, bob.Token, nil, 409, "already_in_session")
+
 	var st state
 	c.call("GET", fmt.Sprintf("/api/sessions/%d/state", sid), alice.Token, nil, 200, &st)
 	if st.Status != "LOBBY_OPEN" {
@@ -304,6 +314,8 @@ func TestFullGame(t *testing.T) {
 	}
 	c.expectError("POST", "/api/game/reroll", alice.Token, map[string]any{"fixed_die_ids": []int32{}}, 403, "not_your_turn")
 	c.expectError("POST", fmt.Sprintf("/api/sessions/%d/leave", sid), alice.Token, nil, 409, "session_finished")
+	// после завершения партии можно войти в другое лобби
+	c.call("POST", carolJoin, bob.Token, nil, 200, nil)
 
 	var prof struct {
 		GamesPlayed int32 `json:"games_played"`

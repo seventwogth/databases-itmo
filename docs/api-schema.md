@@ -118,7 +118,7 @@ sequenceDiagram
     U->>C: Вход в лобби
     C->>S: Auth Token + session_id
     S->>DB: session_id + user_id
-    Note over S,DB: Проверки — status = LOBBY_OPEN, игроков < 4,<br/>пользователь ещё не состоит в этом лобби
+    Note over S,DB: Проверки — status = LOBBY_OPEN, игроков < 4,<br/>пользователь ещё не состоит в этом лобби<br/>и не состоит в другой незавершённой сессии
     DB-->>S: session_id, status, players[]
     S-->>C: Лобби
     C-->>U: Игрок входит в матч
