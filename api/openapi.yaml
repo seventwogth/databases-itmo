@@ -1,0 +1,586 @@
+openapi: 3.0.3
+info:
+  title: Poker API — «Покер на костях»
+  version: 0.1.0
+  description: |
+    REST API по сценариям из `docs/api-schema.md`. Бизнес-правила проверяют SQL-функции
+    из `docs/sql-functions.md`, их коды ошибок приходят в поле `error`.
+
+    **Как тестировать в Swagger UI:**
+    1. `POST /api/auth/register` (или `/login`) — скопируйте `token` из ответа.
+    2. Нажмите **Authorize** и вставьте токен (без префикса `Bearer`).
+    3. Для партии нужно минимум два пользователя: зарегистрируйте второго и
+       переключайте токен в **Authorize**, действуя за каждого по очереди.
+servers:
+  - url: /
+tags:
+  - name: auth
+    description: 1. Авторизация / регистрация
+  - name: lobby
+    description: 2–5. Лобби и старт игры
+  - name: turn
+    description: 6–7. Ход — переброс и выбор комбинации
+  - name: session
+    description: 8–9. Состояние партии и выход
+  - name: reference
+    description: Справочники
+security:
+  - bearerAuth: []
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: Регистрация
+      description: Сервер хеширует пароль (bcrypt) и вызывает `register_user`. Возвращает профиль, Auth Token и открытые лобби.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Credentials' }
+      responses:
+        '201':
+          description: Пользователь создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Вход
+      description: '`find_user_by_login` → сверка хеша на сервере → `touch_last_active`, `get_profile`, `list_open_lobbies`.'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Credentials' }
+      responses:
+        '200':
+          description: Успешный вход
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/profile:
+    get:
+      tags: [auth]
+      summary: Профиль текущего пользователя
+      description: '`get_profile`'
+      responses:
+        '200':
+          description: Профиль
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/combinations:
+    get:
+      tags: [reference]
+      summary: Справочник комбинаций
+      description: Содержимое таблицы `Combinations`.
+      responses:
+        '200':
+          description: Все комбинации
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Combination' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/lobbies:
+    get:
+      tags: [lobby]
+      summary: 3. Поиск лобби
+      description: '`list_open_lobbies` — только `LOBBY_OPEN` и меньше 4 игроков.'
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Открытые лобби
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LobbySummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [lobby]
+      summary: 2. Создание лобби
+      description: '`create_lobby` — создатель сразу входит в лобби. Нельзя состоять в другой незавершённой сессии.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [turn_amount]
+              properties:
+                turn_amount: { type: integer, minimum: 1, example: 3, description: Число ходов на игрока (N) }
+      responses:
+        '201':
+          description: Лобби создано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lobby' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/lobbies/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    get:
+      tags: [lobby]
+      summary: Карточка лобби
+      description: '`get_lobby`'
+      responses:
+        '200':
+          description: Лобби
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lobby' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/lobbies/{session_id}/join:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    post:
+      tags: [lobby]
+      summary: 4. Вход в лобби
+      description: '`join_lobby` → `get_lobby`. Проверки: `LOBBY_OPEN`, игроков < 4, пользователь ещё не в лобби.'
+      responses:
+        '200':
+          description: Лобби после входа
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lobby' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/lobbies/{session_id}/leave:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    post:
+      tags: [lobby]
+      summary: Выход из лобби до старта
+      description: '`leave_lobby` — при уходе последнего игрока лобби удаляется.'
+      responses:
+        '204': { description: Игрок вышел }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/lobbies/{session_id}/start:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    post:
+      tags: [lobby]
+      summary: 5. Начало игры и первый бросок
+      description: |
+        `start_game` — статус `IN_PROGRESS`, случайный порядок `turn_at`, автоматический первый бросок
+        для первого игрока; затем `available_combinations`. Запускать может любой участник лобби.
+      responses:
+        '200':
+          description: Игра началась
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StartGameResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/game/reroll:
+    post:
+      tags: [turn]
+      summary: 6. Фиксация костей и повторный бросок
+      description: |
+        `reroll_dice` — ход находится по пользователю (`active_turn`). `fixed_die_ids` — **полный** список
+        фиксируемых костей: остальные снимаются с фиксации и перебрасываются. Максимум 3 броска за ход.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fixed_die_ids:
+                  type: array
+                  items: { type: integer }
+                  maxItems: 4
+                  example: []
+      responses:
+        '200':
+          description: Результат броска
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RerollResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/turns/{turn_id}:
+    parameters:
+      - $ref: '#/components/parameters/TurnID'
+    get:
+      tags: [turn]
+      summary: Состояние хода
+      description: '`get_turn_state`; для незакрытого хода — ещё и `available_combinations`.'
+      responses:
+        '200':
+          description: Ход
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TurnState' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/turns/{turn_id}/finish:
+    parameters:
+      - $ref: '#/components/parameters/TurnID'
+    post:
+      tags: [turn]
+      summary: 7. Выбор комбинации / завершение хода
+      description: |
+        `finish_turn` — комбинация должна соответствовать костям. Очки: сумма костей комбинации +
+        `Combinations.points`, ×2 с первого броска (кроме «Шанса»). Следующему игроку автоматически
+        делается первый бросок.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [combo_id]
+              properties:
+                combo_id: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: Ход закрыт
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TurnResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/turns/{turn_id}/skip:
+    parameters:
+      - $ref: '#/components/parameters/TurnID'
+    post:
+      tags: [turn]
+      summary: 7. Завершение хода без комбинации (0 очков)
+      description: '`skip_turn` — только после третьего броска.'
+      responses:
+        '200':
+          description: Ход закрыт с нулём очков
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TurnResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/sessions/{session_id}/state:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    get:
+      tags: [session]
+      summary: 8. Состояние партии (short-polling)
+      description: |
+        - `LOBBY_OPEN` — только состав лобби.
+        - `IN_PROGRESS` — `advance_turn` + текущий ход (`active_turn`, `get_turn_state`, `available_combinations`).
+        - Все сделали N ходов — `finish_session` (если статус ещё не `FINISHED`), затем `results` и `winner_ids`.
+          Несколько `winner_ids` — ничья.
+      responses:
+        '200':
+          description: Состояние
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionState' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/sessions/{session_id}/leave:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    post:
+      tags: [session]
+      summary: 9. Выход из матча
+      description: '`leave_match` — игрок удаляется вместе со своими ходами; возвращается профиль.'
+      responses:
+        '200':
+          description: Профиль игрока
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    SessionID:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    TurnID:
+      name: turn_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос (`invalid_argument`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Нет или неверный Auth Token (`unauthorized`), неверный логин/пароль (`invalid_credentials`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Ход другого игрока (`not_your_turn`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: '`lobby_not_found`, `not_in_lobby`, `turn_not_found`, `user_not_found`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: |
+        `login_already_taken`, `lobby_not_open`, `lobby_full`, `already_joined`, `not_enough_players`,
+        `already_in_session`, `turn_already_closed`, `no_throws_left`, `throws_not_exhausted`,
+        `turn_already_open`, `session_not_complete`, `session_finished`
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unprocessable:
+      description: '`combo_not_available`, `all_dice_fixed`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: lobby_full, description: Константа из таблицы «Коды ошибок» }
+        message: { type: string }
+
+    Credentials:
+      type: object
+      required: [login, password]
+      properties:
+        login: { type: string, minLength: 1, maxLength: 64, example: alice }
+        password: { type: string, minLength: 1, maxLength: 72, example: secret }
+
+    AuthResponse:
+      type: object
+      required: [token, expires_at, profile, lobbies]
+      properties:
+        token: { type: string, description: 'Auth Token — передавать как `Authorization: Bearer <token>`' }
+        expires_at: { type: string, format: date-time }
+        profile: { $ref: '#/components/schemas/Profile' }
+        lobbies:
+          type: array
+          items: { $ref: '#/components/schemas/LobbySummary' }
+
+    Profile:
+      type: object
+      required: [user_id, login, games_played, games_won, best_total]
+      properties:
+        user_id: { type: integer }
+        login: { type: string }
+        last_active: { type: string, format: date-time, nullable: true }
+        games_played: { type: integer, description: Завершённых партий }
+        games_won: { type: integer }
+        best_total: { type: integer }
+
+    Combination:
+      type: object
+      required: [combo_id, name, points]
+      properties:
+        combo_id: { type: integer }
+        name: { type: string, example: Каре }
+        points: { type: integer, example: 40 }
+
+    AvailableCombination:
+      type: object
+      required: [combo_id, name, points, potential_score]
+      properties:
+        combo_id: { type: integer }
+        name: { type: string }
+        points: { type: integer }
+        potential_score: { type: integer, description: Сколько очков даст выбор этой комбинации сейчас }
+
+    LobbySummary:
+      type: object
+      required: [session_id, turn_amount, players_count, started_at]
+      properties:
+        session_id: { type: integer }
+        turn_amount: { type: integer }
+        players_count: { type: integer }
+        started_at: { type: string, format: date-time }
+
+    LobbyPlayer:
+      type: object
+      required: [player_id, user_id, login, turn_at]
+      properties:
+        player_id: { type: integer }
+        user_id: { type: integer }
+        login: { type: string }
+        turn_at: { type: integer, description: Порядок хода }
+
+    Lobby:
+      type: object
+      required: [session_id, status, turn_amount, players]
+      properties:
+        session_id: { type: integer }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        turn_amount: { type: integer }
+        players:
+          type: array
+          items: { $ref: '#/components/schemas/LobbyPlayer' }
+
+    SessionStatus:
+      type: string
+      enum: [LOBBY_OPEN, IN_PROGRESS, FINISHED]
+
+    Die:
+      type: object
+      required: [die_id, value, is_fixed]
+      properties:
+        die_id: { type: integer }
+        value: { type: integer, minimum: 1, maximum: 6 }
+        is_fixed: { type: boolean }
+
+    StartGameResponse:
+      type: object
+      required: [session_id, current_player_id, turn_number, turn_id, throw_number, dice, combinations]
+      properties:
+        session_id: { type: integer }
+        current_player_id: { type: integer, description: '`player_id`, не `user_id`' }
+        turn_number: { type: integer, example: 1 }
+        turn_id: { type: integer }
+        throw_number: { type: integer, example: 1 }
+        dice:
+          type: array
+          items: { $ref: '#/components/schemas/Die' }
+        combinations:
+          type: array
+          items: { $ref: '#/components/schemas/AvailableCombination' }
+
+    RerollResponse:
+      type: object
+      required: [turn_id, throw_number, dice, combinations]
+      properties:
+        turn_id: { type: integer }
+        throw_number: { type: integer, minimum: 2, maximum: 3 }
+        dice:
+          type: array
+          items: { $ref: '#/components/schemas/Die' }
+        combinations:
+          type: array
+          items: { $ref: '#/components/schemas/AvailableCombination' }
+
+    TurnState:
+      type: object
+      required: [turn_id, turn_number, throw_number, dice, combo_id, score, is_closed]
+      properties:
+        turn_id: { type: integer }
+        turn_number: { type: integer }
+        throw_number: { type: integer }
+        dice:
+          type: array
+          items: { $ref: '#/components/schemas/Die' }
+        combo_id: { type: integer, nullable: true }
+        score: { type: integer }
+        is_closed: { type: boolean }
+        combinations:
+          type: array
+          description: Только для незакрытого хода
+          items: { $ref: '#/components/schemas/AvailableCombination' }
+
+    TurnResult:
+      type: object
+      required: [score, total_points]
+      properties:
+        score: { type: integer }
+        total_points: { type: integer }
+
+    Standing:
+      type: object
+      required: [player_id, user_id, login, total_points, turns_played, place]
+      properties:
+        player_id: { type: integer }
+        user_id: { type: integer }
+        login: { type: string }
+        total_points: { type: integer }
+        turns_played: { type: integer }
+        place: { type: integer }
+
+    SessionState:
+      type: object
+      required: [session_id, status, turn_amount, players]
+      properties:
+        session_id: { type: integer }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        turn_amount: { type: integer }
+        players:
+          type: array
+          items: { $ref: '#/components/schemas/LobbyPlayer' }
+        current_player_id: { type: integer, description: IN_PROGRESS }
+        turn_number: { type: integer, description: IN_PROGRESS }
+        turn_id: { type: integer, description: IN_PROGRESS }
+        throw_number: { type: integer, description: IN_PROGRESS }
+        dice:
+          type: array
+          description: IN_PROGRESS
+          items: { $ref: '#/components/schemas/Die' }
+        combinations:
+          type: array
+          description: IN_PROGRESS
+          items: { $ref: '#/components/schemas/AvailableCombination' }
+        standings:
+          type: array
+          description: IN_PROGRESS
+          items: { $ref: '#/components/schemas/Standing' }
+        results:
+          type: array
+          description: FINISHED
+          items: { $ref: '#/components/schemas/Standing' }
+        winner_ids:
+          type: array
+          description: FINISHED — `player_id` победителей; несколько — ничья
+          items: { type: integer }
