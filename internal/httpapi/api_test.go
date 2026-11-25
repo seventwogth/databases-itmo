@@ -24,7 +24,7 @@ import (
 
 // newTestServer создаёт отдельную БД в кластере TEST_DATABASE_URL, применяет миграции
 // и поднимает API. Без TEST_DATABASE_URL тесты пропускаются.
-func newTestServer(t *testing.T) *httptest.Server {
+func newTestServer(t *testing.T) (*httptest.Server, *pgxpool.Pool) {
 	t.Helper()
 	adminURL := os.Getenv("TEST_DATABASE_URL")
 	if adminURL == "" {
@@ -59,7 +59,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	srv := httptest.NewServer(httpapi.New(store.New(pool), auth.NewTokens("test", time.Hour)).Handler())
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, pool
 }
 
 type client struct {
@@ -129,20 +129,32 @@ type playerRef struct {
 	TotalPoints int32 `json:"total_points"`
 }
 
+type sessionPlayer struct {
+	PlayerID    int32  `json:"player_id"`
+	UserID      int32  `json:"user_id"`
+	TurnAt      int32  `json:"turn_at"`
+	TotalPoints *int32 `json:"total_points"`
+	TurnsPlayed *int32 `json:"turns_played"`
+	Place       *int32 `json:"place"`
+}
+
 type state struct {
-	Status          string
-	Players         []playerRef
-	CurrentPlayerID int32 `json:"current_player_id"`
-	TurnID          int32 `json:"turn_id"`
-	ThrowNumber     int32 `json:"throw_number"`
-	Dice            []die
-	Combinations    []combo
-	Results         []playerRef
-	WinnerIDs       []int32 `json:"winner_ids"`
+	Status               string
+	Players              []sessionPlayer
+	CurrentPlayerID      int32  `json:"current_player_id"`
+	TurnID               int32  `json:"turn_id"`
+	ThrowNumber          int32  `json:"throw_number"`
+	TurnRemainingSeconds *int32 `json:"turn_remaining_seconds"`
+	Dice                 []die
+	Combinations         []combo
+	Standings            json.RawMessage `json:"standings"`
+	Results              []playerRef
+	WinnerIDs            []int32 `json:"winner_ids"`
 }
 
 func TestFullGame(t *testing.T) {
-	c := client{t: t, srv: newTestServer(t)}
+	srv, pool := newTestServer(t)
+	c := client{t: t, srv: srv}
 
 	// 1. Регистрация и вход
 	var alice, bob authResp
@@ -202,8 +214,13 @@ func TestFullGame(t *testing.T) {
 
 	var st state
 	c.call("GET", fmt.Sprintf("/api/sessions/%d/state", sid), alice.Token, nil, 200, &st)
-	if st.Status != "LOBBY_OPEN" {
+	if st.Status != "LOBBY_OPEN" || st.TurnRemainingSeconds != nil || len(st.Players) != 2 {
 		t.Fatalf("state: %+v", st)
+	}
+	for _, p := range st.Players {
+		if p.TotalPoints != nil || p.TurnsPlayed != nil || p.Place != nil {
+			t.Fatalf("unexpected player stats before start: %+v", p)
+		}
 	}
 
 	// 5. Старт и первый бросок
@@ -224,10 +241,13 @@ func TestFullGame(t *testing.T) {
 
 	// 6–7. Партия: 2 игрока × 2 хода
 	statePath := fmt.Sprintf("/api/sessions/%d/state", sid)
+	pointsByPlayer := make(map[int32]int32)
+	turnsByPlayer := make(map[int32]int32)
 	for turn := 0; ; turn++ {
 		if turn > 10 {
 			t.Fatal("game did not finish")
 		}
+		st = state{}
 		c.call("GET", statePath, alice.Token, nil, 200, &st)
 		if st.Status == "FINISHED" {
 			break
@@ -235,8 +255,25 @@ func TestFullGame(t *testing.T) {
 		if len(st.Dice) != 5 || st.ThrowNumber != 1 {
 			t.Fatalf("turn %d state: %+v", turn, st)
 		}
+		if st.TurnRemainingSeconds == nil || *st.TurnRemainingSeconds < 1 || *st.TurnRemainingSeconds > 60 {
+			t.Fatalf("turn %d: expected 1–60 remaining seconds in response", turn)
+		}
+		if len(st.Players) != 2 || len(st.Standings) != 0 {
+			t.Fatalf("expected two player entries and no standings field: %+v", st)
+		}
 		var cur, other string
-		for _, p := range st.Players {
+		for i, p := range st.Players {
+			wantPoints := pointsByPlayer[p.PlayerID]
+			wantTurns := turnsByPlayer[p.PlayerID]
+			wantPlace := int32(1)
+			if pointsByPlayer[st.Players[1-i].PlayerID] > wantPoints {
+				wantPlace = 2
+			}
+			if p.TurnAt != int32(i+1) || p.TotalPoints == nil || *p.TotalPoints != wantPoints ||
+				p.TurnsPlayed == nil || *p.TurnsPlayed != wantTurns || p.Place == nil || *p.Place != wantPlace {
+				t.Fatalf("player %d: expected turn_at %d, total_points %d, turns_played %d, place %d, got %+v",
+					p.PlayerID, i+1, wantPoints, wantTurns, wantPlace, p)
+			}
 			if p.PlayerID == st.CurrentPlayerID {
 				cur = tokenByUser[p.UserID]
 			} else {
@@ -259,9 +296,21 @@ func TestFullGame(t *testing.T) {
 			Dice         []die
 			Combinations []combo
 		}
+		if turn == 0 {
+			if _, err := pool.Exec(t.Context(), `UPDATE turns SET deadline_at = statement_timestamp() - interval '1 second' WHERE turn_id = $1`, st.TurnID); err != nil {
+				t.Fatal(err)
+			}
+		}
 		c.call("POST", "/api/game/reroll", cur, map[string]any{"fixed_die_ids": []int32{fixed.DieID}}, 200, &rr)
 		if rr.ThrowNumber != 2 || rr.Dice[0].Value != fixed.Value || !rr.Dice[0].IsFixed || rr.Dice[1].IsFixed {
 			t.Fatalf("reroll 2: %+v (fixed %+v)", rr, fixed)
+		}
+		if turn == 0 {
+			var expired state
+			c.call("GET", statePath, alice.Token, nil, 200, &expired)
+			if expired.TurnID != st.TurnID || expired.TurnRemainingSeconds == nil || *expired.TurnRemainingSeconds != 0 {
+				t.Fatal("expected the same turn with an explicit zero remaining seconds after reroll")
+			}
 		}
 		// бросок 3: все свободны
 		c.call("POST", "/api/game/reroll", cur, map[string]any{"fixed_die_ids": []int32{}}, 200, &rr)
@@ -288,6 +337,8 @@ func TestFullGame(t *testing.T) {
 				t.Fatalf("score %d, potential %d", res.Score, best.PotentialScore)
 			}
 		}
+		pointsByPlayer[st.CurrentPlayerID] = res.TotalPoints
+		turnsByPlayer[st.CurrentPlayerID]++
 		c.expectError("POST", finishPath, cur, map[string]int32{"combo_id": 1}, 403, "not_your_turn")
 
 		var closed struct {
@@ -301,7 +352,7 @@ func TestFullGame(t *testing.T) {
 	}
 
 	// 8. Результаты
-	if len(st.Results) != 2 || len(st.WinnerIDs) == 0 {
+	if len(st.Results) != 2 || len(st.WinnerIDs) == 0 || st.TurnRemainingSeconds != nil {
 		t.Fatalf("finished state: %+v", st)
 	}
 	maxPts := st.Results[0].TotalPoints
@@ -327,7 +378,8 @@ func TestFullGame(t *testing.T) {
 }
 
 func TestLeave(t *testing.T) {
-	c := client{t: t, srv: newTestServer(t)}
+	srv, _ := newTestServer(t)
+	c := client{t: t, srv: srv}
 	var a, b authResp
 	c.call("POST", "/api/auth/register", "", map[string]string{"login": "a", "password": "p"}, 201, &a)
 	c.call("POST", "/api/auth/register", "", map[string]string{"login": "b", "password": "p"}, 201, &b)

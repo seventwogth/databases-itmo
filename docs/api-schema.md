@@ -203,6 +203,8 @@ sequenceDiagram
 
 ## 8. Состояние партии (short-polling)
 
+`players` упорядочен по `turn_at`. При `IN_PROGRESS` у каждого игрока есть `total_points`, `turns_played` и `place`.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -217,7 +219,7 @@ sequenceDiagram
         DB-->>S: Состояние партии
         alt Не все игроки сделали N ходов
             Note over S,DB: Текущий игрок определяется по Players.turn_at.<br/>Его первый бросок уже сделан автоматически — клиент получает кости.
-            S-->>C: status = IN_PROGRESS, current_player_id, turn_number, turn_id, throw_number, dice[], combinations[], standings[]
+            S-->>C: status = IN_PROGRESS, players[] со статистикой, current_player_id, turn_number, turn_id, throw_number, turn_remaining_seconds, dice[], combinations[]
             C-->>U: Следующий ход
         else У всех игроков N ходов
             opt status = IN_PROGRESS (первый запрос после последнего хода)
@@ -264,5 +266,5 @@ sequenceDiagram
 | Начало игры и первый бросок | Auth Token + session_id | current_player_id, turn_number = 1, turn_id, throw_number = 1, dice[], combinations[] |
 | Фиксация и повторный бросок | Auth Token + fixed_die_ids[] | dice[], throw_number, combinations[] |
 | Завершение хода | Auth Token + turn_id + combo_id | score, total_points |
-| Состояние партии (polling) | Auth Token + session_id | `IN_PROGRESS`: current_player_id, turn_number, turn_id, throw_number, dice[], combinations[], standings[]<br/>`FINISHED`: results[], winner_ids[] |
+| Состояние партии (polling) | Auth Token + session_id | `IN_PROGRESS`: players[] со статистикой, current_player_id, turn_number, turn_id, throw_number, turn_remaining_seconds, dice[], combinations[]<br/>`FINISHED`: results[], winner_ids[] |
 | Выход из матча | Auth Token + session_id | Профиль игрока |

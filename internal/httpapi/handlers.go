@@ -373,22 +373,29 @@ func (s *Server) skipTurn(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---------- 8. Состояние партии (short-polling) ----------
+// ---------- 8. Состояние партии  ----------
+
+type sessionPlayer struct {
+	store.LobbyPlayer
+	TotalPoints *int32 `json:"total_points,omitempty"`
+	TurnsPlayed *int32 `json:"turns_played,omitempty"`
+	Place       *int32 `json:"place,omitempty"`
+}
 
 type sessionStateResponse struct {
-	SessionID  int32               `json:"session_id"`
-	Status     string              `json:"status"`
-	TurnAmount int32               `json:"turn_amount"`
-	Players    []store.LobbyPlayer `json:"players"`
+	SessionID  int32           `json:"session_id"`
+	Status     string          `json:"status"`
+	TurnAmount int32           `json:"turn_amount"`
+	Players    []sessionPlayer `json:"players"`
 
 	// IN_PROGRESS
-	CurrentPlayerID *int32                       `json:"current_player_id,omitempty"`
-	TurnNumber      *int32                       `json:"turn_number,omitempty"`
-	TurnID          *int32                       `json:"turn_id,omitempty"`
-	ThrowNumber     *int32                       `json:"throw_number,omitempty"`
-	Dice            []store.Die                  `json:"dice,omitzero"`
-	Combinations    []store.AvailableCombination `json:"combinations,omitzero"`
-	Standings       []store.Standing             `json:"standings,omitzero"`
+	CurrentPlayerID      *int32                       `json:"current_player_id,omitempty"`
+	TurnNumber           *int32                       `json:"turn_number,omitempty"`
+	TurnID               *int32                       `json:"turn_id,omitempty"`
+	ThrowNumber          *int32                       `json:"throw_number,omitempty"`
+	TurnRemainingSeconds *int32                       `json:"turn_remaining_seconds,omitempty"`
+	Dice                 []store.Die                  `json:"dice,omitzero"`
+	Combinations         []store.AvailableCombination `json:"combinations,omitzero"`
 
 	// FINISHED
 	Results   []store.Standing `json:"results,omitzero"`
@@ -407,7 +414,11 @@ func (s *Server) sessionState(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		resp.SessionID, resp.Status, resp.TurnAmount, resp.Players = lobby.SessionID, lobby.Status, lobby.TurnAmount, lobby.Players
+		resp.SessionID, resp.Status, resp.TurnAmount = lobby.SessionID, lobby.Status, lobby.TurnAmount
+		resp.Players = make([]sessionPlayer, len(lobby.Players))
+		for i, player := range lobby.Players {
+			resp.Players[i].LobbyPlayer = player
+		}
 
 		switch lobby.Status {
 		case "LOBBY_OPEN":
@@ -418,7 +429,6 @@ func (s *Server) sessionState(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 			if complete {
-				// первый запрос после последнего хода — завершаем партию
 				res, err := q.FinishSession(ctx, sid)
 				if err != nil {
 					return err
@@ -449,16 +459,22 @@ func fillInProgress(r *http.Request, q *store.Queries, sid int32, resp *sessionS
 	if err != nil {
 		return err
 	}
-	resp.CurrentPlayerID, resp.TurnNumber, resp.Standings = &progress.CurrentPlayerID, &progress.TurnNumber, progress.Standings
+	resp.CurrentPlayerID, resp.TurnNumber = &progress.CurrentPlayerID, &progress.TurnNumber
 
-	var currentUser int32
+	standingsByPlayer := make(map[int32]store.Standing, len(progress.Standings))
 	for _, st := range progress.Standings {
-		if st.PlayerID == progress.CurrentPlayerID {
-			currentUser = st.UserID
+		standingsByPlayer[st.PlayerID] = st
+	}
+	for i := range resp.Players {
+		player := &resp.Players[i]
+		if st, ok := standingsByPlayer[player.PlayerID]; ok {
+			player.TotalPoints = &st.TotalPoints
+			player.TurnsPlayed = &st.TurnsPlayed
+			player.Place = &st.Place
 		}
 	}
-	// первый бросок текущего игрока уже сделан автоматически — отдаём его кости
-	turnID, err := q.ActiveTurn(ctx, currentUser)
+	// первый бросок текущего игрока уже сделан автоматически
+	turnID, err := q.ActiveTurn(ctx, standingsByPlayer[progress.CurrentPlayerID].UserID)
 	if err != nil {
 		return err
 	}
@@ -467,6 +483,7 @@ func fillInProgress(r *http.Request, q *store.Queries, sid int32, resp *sessionS
 		return err
 	}
 	resp.TurnID, resp.ThrowNumber, resp.Dice = &turn.TurnID, &turn.ThrowNumber, turn.Dice
+	resp.TurnRemainingSeconds = &turn.RemainingSeconds
 	resp.Combinations, err = q.AvailableCombinations(ctx, turnID)
 	return err
 }

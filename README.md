@@ -61,7 +61,7 @@ make run       # go run ./cmd/server, миграции применяются п
 | Состояние хода | `GET /api/turns/{id}` | `get_turn_state`, `is_turn_closed`, `available_combinations` |
 | 7. Выбор комбинации | `POST /api/turns/{id}/finish` | `active_turn`, `finish_turn` |
 | 7. Ход без комбинации | `POST /api/turns/{id}/skip` | `active_turn`, `skip_turn` |
-| 8. Состояние партии | `GET /api/sessions/{id}/state` | `get_lobby`, `is_session_complete`, `advance_turn`, `active_turn`, `get_turn_state`, `available_combinations`, `finish_session`, `get_session_result` |
+| 8. Состояние партии | `GET /api/sessions/{id}/state` | `get_lobby`, `is_session_complete`, `advance_turn`, `active_turn`, `get_turn_state`, `turn_remaining_seconds`, `available_combinations`, `finish_session`, `get_session_result` |
 | 9. Выход из матча | `POST /api/sessions/{id}/leave` | `leave_match`, `get_profile` |
 
 Каждый запрос с токеном вызывает `touch_last_active`. Ошибки приходят как

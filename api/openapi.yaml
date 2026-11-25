@@ -307,7 +307,7 @@ paths:
       summary: 8. Состояние партии (short-polling)
       description: |
         - `LOBBY_OPEN` — только состав лобби.
-        - `IN_PROGRESS` — `advance_turn` + текущий ход (`active_turn`, `get_turn_state`, `available_combinations`).
+        - `IN_PROGRESS` — статистика в `players` и текущий ход (`advance_turn`, `active_turn`, `get_turn_state`, `available_combinations`).
         - Все сделали N ходов — `finish_session` (если статус ещё не `FINISHED`), затем `results` и `winner_ids`.
           Несколько `winner_ids` — ничья.
       responses:
@@ -550,6 +550,16 @@ components:
         turns_played: { type: integer }
         place: { type: integer }
 
+    SessionPlayer:
+      allOf:
+        - $ref: '#/components/schemas/LobbyPlayer'
+        - type: object
+          description: Статистика игрока при IN_PROGRESS
+          properties:
+            total_points: { type: integer }
+            turns_played: { type: integer }
+            place: { type: integer }
+
     SessionState:
       type: object
       required: [session_id, status, turn_amount, players]
@@ -559,11 +569,17 @@ components:
         turn_amount: { type: integer }
         players:
           type: array
-          items: { $ref: '#/components/schemas/LobbyPlayer' }
+          description: Игроки в порядке turn_at. При IN_PROGRESS каждый элемент содержит статистику.
+          items: { $ref: '#/components/schemas/SessionPlayer' }
         current_player_id: { type: integer, description: IN_PROGRESS }
         turn_number: { type: integer, description: IN_PROGRESS }
         turn_id: { type: integer, description: IN_PROGRESS }
         throw_number: { type: integer, description: IN_PROGRESS }
+        turn_remaining_seconds:
+          type: integer
+          minimum: 0
+          maximum: 60
+          description: 'Только при IN_PROGRESS. Остаток времени текущего хода в секундах, округлённый вверх. Лимит 60 секунд с начала хода. Переброс сохраняет срок хода.'
         dice:
           type: array
           description: IN_PROGRESS
@@ -572,10 +588,6 @@ components:
           type: array
           description: IN_PROGRESS
           items: { $ref: '#/components/schemas/AvailableCombination' }
-        standings:
-          type: array
-          description: IN_PROGRESS
-          items: { $ref: '#/components/schemas/Standing' }
         results:
           type: array
           description: FINISHED

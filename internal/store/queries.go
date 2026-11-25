@@ -73,12 +73,13 @@ type Reroll struct {
 }
 
 type TurnState struct {
-	TurnID      int32  `db:"turn_id"      json:"turn_id"`
-	TurnNumber  int32  `db:"turn_number"  json:"turn_number"`
-	ThrowNumber int32  `db:"throw_number" json:"throw_number"`
-	Dice        []Die  `db:"dice"         json:"dice"`
-	ComboID     *int32 `db:"combo_id"     json:"combo_id"`
-	Score       int32  `db:"score"        json:"score"`
+	TurnID           int32  `db:"turn_id"           json:"turn_id"`
+	TurnNumber       int32  `db:"turn_number"       json:"turn_number"`
+	ThrowNumber      int32  `db:"throw_number"      json:"throw_number"`
+	Dice             []Die  `db:"dice"              json:"dice"`
+	ComboID          *int32 `db:"combo_id"          json:"combo_id"`
+	Score            int32  `db:"score"             json:"score"`
+	RemainingSeconds int32  `db:"remaining_seconds" json:"-"`
 }
 
 type AvailableCombination struct {
@@ -223,7 +224,9 @@ func (q *Queries) RerollDice(ctx context.Context, userID int32, fixedDieIDs []in
 }
 
 func (q *Queries) GetTurnState(ctx context.Context, turnID int32) (TurnState, error) {
-	return one[TurnState](ctx, q.q, `SELECT * FROM get_turn_state($1)`, turnID)
+	return one[TurnState](ctx, q.q, `
+		SELECT t.*, turn_remaining_seconds(t.turn_id) AS remaining_seconds
+		FROM get_turn_state($1) AS t`, turnID)
 }
 
 func (q *Queries) AvailableCombinations(ctx context.Context, turnID int32) ([]AvailableCombination, error) {
